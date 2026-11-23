@@ -1,0 +1,351 @@
+{
+  "entities": {
+    "PlatformSite": {
+      "title": "PlatformSite",
+      "description": "Global FTD website configuration, hero copy, announcements, and feature toggles.",
+      "type": "object",
+      "properties": {
+        "brandName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "logoUrl": { "type": "string", "maxLength": 400000 },
+        "heroEyebrow": { "type": "string", "maxLength": 120 },
+        "heroTitle": { "type": "string", "maxLength": 180 },
+        "heroSubtitle": { "type": "string", "maxLength": 450 },
+        "gameIntroTitle": { "type": "string", "maxLength": 140 },
+        "gameIntroBody": { "type": "string", "maxLength": 1400 },
+        "announcementText": { "type": "string", "maxLength": 240 },
+        "announcementActive": { "type": "boolean" },
+        "seasonLabel": { "type": "string", "maxLength": 60 },
+        "maintenanceMode": { "type": "boolean" },
+        "chatEnabled": { "type": "boolean" },
+        "lastPublishedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": [
+        "brandName",
+        "logoUrl",
+        "heroEyebrow",
+        "heroTitle",
+        "heroSubtitle",
+        "gameIntroTitle",
+        "gameIntroBody",
+        "announcementText",
+        "announcementActive",
+        "seasonLabel",
+        "maintenanceMode",
+        "chatEnabled",
+        "lastPublishedAt"
+      ]
+    },
+    "LiveMatch": {
+      "title": "LiveMatch",
+      "description": "Singleton real-time live stream, scoreboard edition, teams, scores, and clock anchor.",
+      "type": "object",
+      "properties": {
+        "streamActive": { "type": "boolean" },
+        "streamUrl": { "type": "string", "maxLength": 1000 },
+        "streamTitle": { "type": "string", "maxLength": 140 },
+        "competitionName": { "type": "string", "maxLength": 100 },
+        "stadiumName": { "type": "string", "maxLength": 100 },
+        "scoreboardEdition": {
+          "type": "string",
+          "enum": ["champions-league", "premier-league", "bundesliga", "world-cup"]
+        },
+        "homeTeamId": { "type": "number" },
+        "awayTeamId": { "type": "number" },
+        "homeTeamName": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "awayTeamName": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "homeTeamShort": { "type": "string", "minLength": 1, "maxLength": 6 },
+        "awayTeamShort": { "type": "string", "minLength": 1, "maxLength": 6 },
+        "homeTeamLogo": { "type": "string", "maxLength": 400000 },
+        "awayTeamLogo": { "type": "string", "maxLength": 400000 },
+        "homeTeamColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "awayTeamColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "homeScore": { "type": "number" },
+        "awayScore": { "type": "number" },
+        "matchMinute": { "type": "number" },
+        "matchSecond": { "type": "number" },
+        "clockRunning": { "type": "boolean" },
+        "clockAnchorMs": { "type": "number" },
+        "halfLabel": { "type": "string", "maxLength": 30 },
+        "status": {
+          "type": "string",
+          "enum": ["PRE_MATCH", "LIVE", "HALFTIME", "PAUSED", "ENDED"]
+        },
+        "lastGoalId": { "type": "number" },
+        "lastGoalTeam": { "type": "string" },
+        "lastGoalScorer": { "type": "string", "maxLength": 80 },
+        "lastGoalMinute": { "type": "number" },
+        "viewerCount": { "type": "number" }
+      },
+      "required": [
+        "streamActive",
+        "streamUrl",
+        "streamTitle",
+        "competitionName",
+        "stadiumName",
+        "scoreboardEdition",
+        "homeTeamName",
+        "awayTeamName",
+        "homeTeamShort",
+        "awayTeamShort",
+        "homeTeamLogo",
+        "awayTeamLogo",
+        "homeTeamColor",
+        "awayTeamColor",
+        "homeScore",
+        "awayScore",
+        "matchMinute",
+        "matchSecond",
+        "clockRunning",
+        "halfLabel",
+        "status",
+        "lastGoalId",
+        "lastGoalScorer",
+        "lastGoalMinute",
+        "viewerCount"
+      ]
+    },
+    "BallonDorConfig": {
+      "title": "BallonDorConfig",
+      "description": "Global FTD Ballon d'Or ceremony state, voting toggle, and selected winner.",
+      "type": "object",
+      "properties": {
+        "ceremonyTitle": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "seasonYear": { "type": "string", "minLength": 1, "maxLength": 20 },
+        "votingEnabled": { "type": "boolean" },
+        "ceremonyPhase": { "type": "string", "enum": ["idle", "countdown", "revealed"] },
+        "winnerId": { "type": "number" },
+        "ceremonyDate": { "type": "string", "maxLength": 50 }
+      },
+      "required": [
+        "ceremonyTitle",
+        "seasonYear",
+        "votingEnabled",
+        "ceremonyPhase",
+        "ceremonyDate"
+      ]
+    },
+    "NewsArticle": {
+      "title": "NewsArticle",
+      "description": "Published FTD news article displayed on the home page.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 320 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 2400 },
+        "imageUrl": { "type": "string", "maxLength": 400000 },
+        "featured": { "type": "boolean" },
+        "publishedAt": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["id", "title", "category", "summary", "body", "imageUrl", "featured", "publishedAt"]
+    },
+    "Competition": {
+      "title": "Competition",
+      "description": "Official FTD competition entry shown on the home page.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "format": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "maxLength": 40 },
+        "teamsCount": { "type": "number" },
+        "prizePool": { "type": "string", "maxLength": 100 },
+        "season": { "type": "string", "maxLength": 30 },
+        "description": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["id", "name", "format", "status", "teamsCount", "prizePool", "season", "description"]
+    },
+    "UpcomingEvent": {
+      "title": "UpcomingEvent",
+      "description": "Upcoming FTD matchday fixture or special gala event.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "competition": { "type": "string", "maxLength": 80 },
+        "homeTeam": { "type": "string", "maxLength": 60 },
+        "awayTeam": { "type": "string", "maxLength": 60 },
+        "kickoffTime": { "type": "string", "maxLength": 60 },
+        "venue": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "title", "competition", "homeTeam", "awayTeam", "kickoffTime", "venue", "status"]
+    },
+    "BallonDorNominee": {
+      "title": "BallonDorNominee",
+      "description": "FTD Ballon d'Or nominated player card and fan vote total.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "club": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "position": { "type": "string", "maxLength": 12 },
+        "nationality": { "type": "string", "maxLength": 40 },
+        "kitNumber": { "type": "number" },
+        "imageUrl": { "type": "string", "maxLength": 400000 },
+        "goals": { "type": "number" },
+        "assists": { "type": "number" },
+        "trophies": { "type": "number" },
+        "rating": { "type": "number" },
+        "votes": { "type": "number" },
+        "rankOrder": { "type": "number" },
+        "isWinner": { "type": "boolean" }
+      },
+      "required": [
+        "id",
+        "name",
+        "club",
+        "position",
+        "nationality",
+        "kitNumber",
+        "imageUrl",
+        "goals",
+        "assists",
+        "trophies",
+        "rating",
+        "votes",
+        "rankOrder",
+        "isWinner"
+      ]
+    },
+    "BallonDorHistory": {
+      "title": "BallonDorHistory",
+      "description": "Historical FTD Ballon d'Or trophy winner archive entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "year": { "type": "string", "minLength": 1, "maxLength": 12 },
+        "winnerName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "club": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "statsSummary": { "type": "string", "maxLength": 180 },
+        "imageUrl": { "type": "string", "maxLength": 400000 }
+      },
+      "required": ["id", "year", "winnerName", "club", "statsSummary", "imageUrl"]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "FTD club preset for the live match scoreboard selector.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "shortName": { "type": "string", "minLength": 1, "maxLength": 6 },
+        "primaryColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "secondaryColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "logoUrl": { "type": "string", "maxLength": 400000 }
+      },
+      "required": ["id", "name", "shortName", "primaryColor", "secondaryColor", "logoUrl"]
+    },
+    "MatchEvent": {
+      "title": "MatchEvent",
+      "description": "Live match timeline event (goal, card, substitution, whistle).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "type": {
+          "type": "string",
+          "enum": ["GOAL", "YELLOW_CARD", "RED_CARD", "SUB", "KICKOFF", "HALFTIME", "FULLTIME"]
+        },
+        "teamSide": { "type": "string", "enum": ["home", "away", "neutral"] },
+        "teamName": { "type": "string", "maxLength": 60 },
+        "playerName": { "type": "string", "maxLength": 80 },
+        "minute": { "type": "number" },
+        "createdAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "type", "teamSide", "teamName", "playerName", "minute", "createdAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Live broadcast spectator and admin chat message.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "sender": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "isAdmin": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "sender", "message", "isAdmin", "createdAt"]
+    },
+    "ManagedUser": {
+      "title": "ManagedUser",
+      "description": "Admin-only FTD player/broadcaster roster record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "username": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "club": { "type": "string", "maxLength": 60 },
+        "role": { "type": "string", "enum": ["Player", "Captain", "Broadcaster", "Moderator"] },
+        "status": { "type": "string", "enum": ["Active", "Suspended"] },
+        "joinedAt": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["id", "username", "club", "role", "status", "joinedAt"]
+    },
+    "AdminAccount": {
+      "title": "AdminAccount",
+      "description": "Authorized FTD administrator UID registry.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["uid", "email", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/platform/site": {
+      "schema": { "$ref": "#/entities/PlatformSite" },
+      "description": "Global site settings document readable worldwide, writable only by verified FTD Admins."
+    },
+    "/platform/liveMatch": {
+      "schema": { "$ref": "#/entities/LiveMatch" },
+      "description": "Global live match scoreboard and broadcast stream state readable worldwide, writable only by verified FTD Admins."
+    },
+    "/platform/ballonDor": {
+      "schema": { "$ref": "#/entities/BallonDorConfig" },
+      "description": "Global Ballon d'Or ceremony configuration readable worldwide, writable only by verified FTD Admins."
+    },
+    "/news/{newsId}": {
+      "schema": { "$ref": "#/entities/NewsArticle" },
+      "description": "News articles collection."
+    },
+    "/competitions/{competitionId}": {
+      "schema": { "$ref": "#/entities/Competition" },
+      "description": "FTD competitions collection."
+    },
+    "/upcomingEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/UpcomingEvent" },
+      "description": "Upcoming FTD events collection."
+    },
+    "/nominees/{nomineeId}": {
+      "schema": { "$ref": "#/entities/BallonDorNominee" },
+      "description": "Ballon d'Or nominees collection (spectators can increment votes by +1 when votingEnabled is true)."
+    },
+    "/ballonDorHistory/{historyId}": {
+      "schema": { "$ref": "#/entities/BallonDorHistory" },
+      "description": "Past Ballon d'Or winners archive."
+    },
+    "/teams/{teamId}": {
+      "schema": { "$ref": "#/entities/Team" },
+      "description": "Team presets collection."
+    },
+    "/matchEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/MatchEvent" },
+      "description": "Live match events timeline collection."
+    },
+    "/chatMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Live spectator chat messages (public create allowed when chatEnabled is true; admin badge restricted)."
+    },
+    "/managedUsers/{userId}": {
+      "schema": { "$ref": "#/entities/ManagedUser" },
+      "description": "Admin-only player and broadcaster roster."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminAccount" },
+      "description": "Authorized FTD administrator UID documents."
+    }
+  }
+}

@@ -8,6 +8,7 @@ import { HomePage } from './pages/HomePage';
 import { BallonDorPage } from './pages/BallonDorPage';
 import { LivePage } from './pages/LivePage';
 import { AdminPage } from './pages/AdminPage';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 function routeFromPath(pathname: string): PageRoute {
   const clean = pathname.replace(/\/+$/, '') || '/';
@@ -167,8 +168,10 @@ function AppShell() {
 
 export default function App() {
   return (
-    <PlatformProvider>
-      <AppShell />
-    </PlatformProvider>
+    <ErrorBoundary>
+      <PlatformProvider>
+        <AppShell />
+      </PlatformProvider>
+    </ErrorBoundary>
   );
 }

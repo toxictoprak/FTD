@@ -1,0 +1,382 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---- Shared Security Primitives ----
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedAccount() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedAccount() && (
+        request.auth.token.email == 'toxictoprak@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isHexColor(val) {
+      return val is string && val.size() == 7 && val.matches('^#[0-9A-Fa-f]{6}$');
+    }
+
+    function isSafeImage(val) {
+      return val is string && val.size() <= 400000;
+    }
+
+    // ---- Validation Blueprints ----
+    function isValidSiteSettings(data) {
+      return data.keys().hasAll([
+          'brandName', 'logoUrl', 'heroEyebrow', 'heroTitle', 'heroSubtitle',
+          'gameIntroTitle', 'gameIntroBody', 'announcementText', 'announcementActive',
+          'seasonLabel', 'maintenanceMode', 'chatEnabled', 'lastPublishedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'brandName', 'logoUrl', 'heroEyebrow', 'heroTitle', 'heroSubtitle',
+          'gameIntroTitle', 'gameIntroBody', 'announcementText', 'announcementActive',
+          'seasonLabel', 'maintenanceMode', 'chatEnabled', 'lastPublishedAt'
+        ]) &&
+        data.brandName is string && data.brandName.size() >= 1 && data.brandName.size() <= 40 &&
+        isSafeImage(data.logoUrl) &&
+        data.heroEyebrow is string && data.heroEyebrow.size() <= 120 &&
+        data.heroTitle is string && data.heroTitle.size() <= 180 &&
+        data.heroSubtitle is string && data.heroSubtitle.size() <= 450 &&
+        data.gameIntroTitle is string && data.gameIntroTitle.size() <= 140 &&
+        data.gameIntroBody is string && data.gameIntroBody.size() <= 1400 &&
+        data.announcementText is string && data.announcementText.size() <= 240 &&
+        data.announcementActive is bool &&
+        data.seasonLabel is string && data.seasonLabel.size() <= 60 &&
+        data.maintenanceMode is bool &&
+        data.chatEnabled is bool &&
+        data.lastPublishedAt is string && data.lastPublishedAt.size() <= 40;
+    }
+
+    function isValidLiveMatch(data) {
+      return data.keys().hasAll([
+          'streamActive', 'streamUrl', 'streamTitle', 'competitionName', 'stadiumName',
+          'scoreboardEdition', 'homeTeamId', 'awayTeamId', 'homeTeamName', 'awayTeamName',
+          'homeTeamShort', 'awayTeamShort', 'homeTeamLogo', 'awayTeamLogo',
+          'homeTeamColor', 'awayTeamColor', 'homeScore', 'awayScore',
+          'matchMinute', 'matchSecond', 'clockRunning', 'halfLabel', 'status',
+          'lastGoalId', 'lastGoalTeam', 'lastGoalScorer', 'lastGoalMinute', 'viewerCount'
+        ]) &&
+        data.keys().hasOnly([
+          'streamActive', 'streamUrl', 'streamTitle', 'competitionName', 'stadiumName',
+          'scoreboardEdition', 'homeTeamId', 'awayTeamId', 'homeTeamName', 'awayTeamName',
+          'homeTeamShort', 'awayTeamShort', 'homeTeamLogo', 'awayTeamLogo',
+          'homeTeamColor', 'awayTeamColor', 'homeScore', 'awayScore',
+          'matchMinute', 'matchSecond', 'clockRunning', 'clockAnchorMs', 'halfLabel', 'status',
+          'lastGoalId', 'lastGoalTeam', 'lastGoalScorer', 'lastGoalMinute', 'viewerCount'
+        ]) &&
+        data.streamActive is bool &&
+        data.streamUrl is string && data.streamUrl.size() <= 1000 &&
+        data.streamTitle is string && data.streamTitle.size() <= 140 &&
+        data.competitionName is string && data.competitionName.size() <= 100 &&
+        data.stadiumName is string && data.stadiumName.size() <= 100 &&
+        data.scoreboardEdition in ['champions-league', 'premier-league', 'bundesliga', 'world-cup'] &&
+        (data.homeTeamId == null || data.homeTeamId is number) &&
+        (data.awayTeamId == null || data.awayTeamId is number) &&
+        data.homeTeamName is string && data.homeTeamName.size() >= 1 && data.homeTeamName.size() <= 60 &&
+        data.awayTeamName is string && data.awayTeamName.size() >= 1 && data.awayTeamName.size() <= 60 &&
+        data.homeTeamShort is string && data.homeTeamShort.size() >= 1 && data.homeTeamShort.size() <= 6 &&
+        data.awayTeamShort is string && data.awayTeamShort.size() >= 1 && data.awayTeamShort.size() <= 6 &&
+        isSafeImage(data.homeTeamLogo) &&
+        isSafeImage(data.awayTeamLogo) &&
+        isHexColor(data.homeTeamColor) &&
+        isHexColor(data.awayTeamColor) &&
+        data.homeScore is number && data.homeScore >= 0 && data.homeScore <= 99 &&
+        data.awayScore is number && data.awayScore >= 0 && data.awayScore <= 99 &&
+        data.matchMinute is number && data.matchMinute >= 0 && data.matchMinute <= 130 &&
+        data.matchSecond is number && data.matchSecond >= 0 && data.matchSecond <= 59 &&
+        data.clockRunning is bool &&
+        (!('clockAnchorMs' in data) || data.clockAnchorMs == null || data.clockAnchorMs is number) &&
+        data.halfLabel is string && data.halfLabel.size() <= 30 &&
+        data.status in ['PRE_MATCH', 'LIVE', 'HALFTIME', 'PAUSED', 'ENDED'] &&
+        data.lastGoalId is number && data.lastGoalId >= 0 &&
+        (data.lastGoalTeam == null || data.lastGoalTeam in ['home', 'away']) &&
+        data.lastGoalScorer is string && data.lastGoalScorer.size() <= 80 &&
+        data.lastGoalMinute is number && data.lastGoalMinute >= 0 && data.lastGoalMinute <= 130 &&
+        data.viewerCount is number && data.viewerCount >= 0;
+    }
+
+    function isValidBallonDorConfig(data) {
+      return data.keys().hasAll([
+          'ceremonyTitle', 'seasonYear', 'votingEnabled', 'ceremonyPhase', 'winnerId', 'ceremonyDate'
+        ]) &&
+        data.keys().hasOnly([
+          'ceremonyTitle', 'seasonYear', 'votingEnabled', 'ceremonyPhase', 'winnerId', 'ceremonyDate'
+        ]) &&
+        data.ceremonyTitle is string && data.ceremonyTitle.size() >= 1 && data.ceremonyTitle.size() <= 120 &&
+        data.seasonYear is string && data.seasonYear.size() >= 1 && data.seasonYear.size() <= 20 &&
+        data.votingEnabled is bool &&
+        data.ceremonyPhase in ['idle', 'countdown', 'revealed'] &&
+        (data.winnerId == null || data.winnerId is number) &&
+        data.ceremonyDate is string && data.ceremonyDate.size() <= 50;
+    }
+
+    function isValidNews(data) {
+      return data.keys().hasAll(['id', 'title', 'category', 'summary', 'body', 'imageUrl', 'featured', 'publishedAt']) &&
+        data.keys().hasOnly(['id', 'title', 'category', 'summary', 'body', 'imageUrl', 'featured', 'publishedAt']) &&
+        data.id is number &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 40 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 320 &&
+        data.body is string && data.body.size() >= 1 && data.body.size() <= 2400 &&
+        isSafeImage(data.imageUrl) &&
+        data.featured is bool &&
+        data.publishedAt is string && data.publishedAt.size() <= 30;
+    }
+
+    function isValidCompetition(data) {
+      return data.keys().hasAll(['id', 'name', 'format', 'status', 'teamsCount', 'prizePool', 'season', 'description']) &&
+        data.keys().hasOnly(['id', 'name', 'format', 'status', 'teamsCount', 'prizePool', 'season', 'description']) &&
+        data.id is number &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.format is string && data.format.size() <= 80 &&
+        data.status is string && data.status.size() <= 40 &&
+        data.teamsCount is number && data.teamsCount >= 2 && data.teamsCount <= 128 &&
+        data.prizePool is string && data.prizePool.size() <= 100 &&
+        data.season is string && data.season.size() <= 30 &&
+        data.description is string && data.description.size() <= 500;
+    }
+
+    function isValidUpcomingEvent(data) {
+      return data.keys().hasAll(['id', 'title', 'competition', 'homeTeam', 'awayTeam', 'kickoffTime', 'venue', 'status']) &&
+        data.keys().hasOnly(['id', 'title', 'competition', 'homeTeam', 'awayTeam', 'kickoffTime', 'venue', 'status']) &&
+        data.id is number &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+        data.competition is string && data.competition.size() <= 80 &&
+        data.homeTeam is string && data.homeTeam.size() <= 60 &&
+        data.awayTeam is string && data.awayTeam.size() <= 60 &&
+        data.kickoffTime is string && data.kickoffTime.size() <= 60 &&
+        data.venue is string && data.venue.size() <= 80 &&
+        data.status is string && data.status.size() <= 40;
+    }
+
+    function isValidNominee(data) {
+      return data.keys().hasAll([
+          'id', 'name', 'club', 'position', 'nationality', 'kitNumber',
+          'imageUrl', 'goals', 'assists', 'trophies', 'rating', 'votes', 'rankOrder', 'isWinner'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'name', 'club', 'position', 'nationality', 'kitNumber',
+          'imageUrl', 'goals', 'assists', 'trophies', 'rating', 'votes', 'rankOrder', 'isWinner'
+        ]) &&
+        data.id is number &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        data.club is string && data.club.size() >= 1 && data.club.size() <= 80 &&
+        data.position is string && data.position.size() <= 12 &&
+        data.nationality is string && data.nationality.size() <= 40 &&
+        data.kitNumber is number && data.kitNumber >= 1 && data.kitNumber <= 99 &&
+        isSafeImage(data.imageUrl) &&
+        data.goals is number && data.goals >= 0 &&
+        data.assists is number && data.assists >= 0 &&
+        data.trophies is number && data.trophies >= 0 &&
+        data.rating is number && data.rating >= 50 && data.rating <= 99.9 &&
+        data.votes is number && data.votes >= 0 &&
+        data.rankOrder is number && data.rankOrder >= 1 &&
+        data.isWinner is bool;
+    }
+
+    function isValidHistory(data) {
+      return data.keys().hasAll(['id', 'year', 'winnerName', 'club', 'statsSummary', 'imageUrl']) &&
+        data.keys().hasOnly(['id', 'year', 'winnerName', 'club', 'statsSummary', 'imageUrl']) &&
+        data.id is number &&
+        data.year is string && data.year.size() >= 1 && data.year.size() <= 12 &&
+        data.winnerName is string && data.winnerName.size() >= 1 && data.winnerName.size() <= 80 &&
+        data.club is string && data.club.size() >= 1 && data.club.size() <= 80 &&
+        data.statsSummary is string && data.statsSummary.size() <= 180 &&
+        isSafeImage(data.imageUrl);
+    }
+
+    function isValidTeam(data) {
+      return data.keys().hasAll(['id', 'name', 'shortName', 'primaryColor', 'secondaryColor', 'logoUrl']) &&
+        data.keys().hasOnly(['id', 'name', 'shortName', 'primaryColor', 'secondaryColor', 'logoUrl']) &&
+        data.id is number &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+        data.shortName is string && data.shortName.size() >= 1 && data.shortName.size() <= 6 &&
+        isHexColor(data.primaryColor) &&
+        isHexColor(data.secondaryColor) &&
+        isSafeImage(data.logoUrl);
+    }
+
+    function isValidMatchEvent(data) {
+      return data.keys().hasAll(['id', 'type', 'teamSide', 'teamName', 'playerName', 'minute', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'type', 'teamSide', 'teamName', 'playerName', 'minute', 'createdAt']) &&
+        data.id is number &&
+        data.type in ['GOAL', 'YELLOW_CARD', 'RED_CARD', 'SUB', 'KICKOFF', 'HALFTIME', 'FULLTIME'] &&
+        data.teamSide in ['home', 'away', 'neutral'] &&
+        data.teamName is string && data.teamName.size() <= 60 &&
+        data.playerName is string && data.playerName.size() <= 80 &&
+        data.minute is number && data.minute >= 0 && data.minute <= 130 &&
+        data.createdAt is string && data.createdAt.size() <= 40;
+    }
+
+    function isValidChatMessage(data) {
+      return data.keys().hasAll(['id', 'sender', 'message', 'isAdmin', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'sender', 'message', 'isAdmin', 'createdAt']) &&
+        data.id is number &&
+        data.sender is string && data.sender.size() >= 1 && data.sender.size() <= 32 &&
+        data.message is string && data.message.size() >= 1 && data.message.size() <= 240 &&
+        data.isAdmin is bool &&
+        data.createdAt is string && data.createdAt.size() <= 40;
+    }
+
+    function isValidManagedUser(data) {
+      return data.keys().hasAll(['id', 'username', 'club', 'role', 'status', 'joinedAt']) &&
+        data.keys().hasOnly(['id', 'username', 'club', 'role', 'status', 'joinedAt']) &&
+        data.id is number &&
+        data.username is string && data.username.size() >= 1 && data.username.size() <= 50 &&
+        data.club is string && data.club.size() <= 60 &&
+        data.role in ['Player', 'Captain', 'Broadcaster', 'Moderator'] &&
+        data.status in ['Active', 'Suspended'] &&
+        data.joinedAt is string && data.joinedAt.size() <= 30;
+    }
+
+    function isValidAdminAccount(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'createdAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.createdAt is string && data.createdAt.size() <= 40;
+    }
+
+    // ---- Collection Rules ----
+    match /test/connection {
+      allow get: if true;
+    }
+
+    match /platform/site {
+      allow get: if true;
+      allow create: if isValidSiteSettings(incoming()) && isAdmin();
+      allow update: if isValidSiteSettings(incoming()) && isAdmin();
+      allow delete: if false;
+    }
+
+    match /platform/liveMatch {
+      allow get: if true;
+      allow create: if isValidLiveMatch(incoming()) && isAdmin();
+      allow update: if isValidLiveMatch(incoming()) && isAdmin();
+      allow delete: if false;
+    }
+
+    match /platform/ballonDor {
+      allow get: if true;
+      allow create: if isValidBallonDorConfig(incoming()) && isAdmin();
+      allow update: if isValidBallonDorConfig(incoming()) && isAdmin();
+      allow delete: if false;
+    }
+
+    match /news/{newsId} {
+      allow get: if isValidId(newsId);
+      allow list: if true;
+      allow create: if isValidId(newsId) && isValidNews(incoming()) && isAdmin();
+      allow update: if isValidId(newsId) && isValidNews(incoming()) && incoming().id == existing().id && isAdmin();
+      allow delete: if isValidId(newsId) && isAdmin();
+    }
+
+    match /competitions/{competitionId} {
+      allow get: if isValidId(competitionId);
+      allow list: if true;
+      allow create: if isValidId(competitionId) && isValidCompetition(incoming()) && isAdmin();
+      allow update: if isValidId(competitionId) && isValidCompetition(incoming()) && incoming().id == existing().id && isAdmin();
+      allow delete: if isValidId(competitionId) && isAdmin();
+    }
+
+    match /upcomingEvents/{eventId} {
+      allow get: if isValidId(eventId);
+      allow list: if true;
+      allow create: if isValidId(eventId) && isValidUpcomingEvent(incoming()) && isAdmin();
+      allow update: if isValidId(eventId) && isValidUpcomingEvent(incoming()) && incoming().id == existing().id && isAdmin();
+      allow delete: if isValidId(eventId) && isAdmin();
+    }
+
+    match /nominees/{nomineeId} {
+      allow get: if isValidId(nomineeId);
+      allow list: if true;
+      allow create: if isValidId(nomineeId) && isValidNominee(incoming()) && isAdmin();
+      allow update: if isValidId(nomineeId) && isValidNominee(incoming()) && (
+        (incoming().id == existing().id && isAdmin()) ||
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['votes']) &&
+          incoming().votes == existing().votes + 1 &&
+          get(/databases/$(database)/documents/platform/ballonDor).data.votingEnabled == true
+        )
+      );
+      allow delete: if isValidId(nomineeId) && isAdmin();
+    }
+
+    match /ballonDorHistory/{historyId} {
+      allow get: if isValidId(historyId);
+      allow list: if true;
+      allow create: if isValidId(historyId) && isValidHistory(incoming()) && isAdmin();
+      allow update: if isValidId(historyId) && isValidHistory(incoming()) && incoming().id == existing().id && isAdmin();
+      allow delete: if isValidId(historyId) && isAdmin();
+    }
+
+    match /teams/{teamId} {
+      allow get: if isValidId(teamId);
+      allow list: if true;
+      allow create: if isValidId(teamId) && isValidTeam(incoming()) && isAdmin();
+      allow update: if isValidId(teamId) && isValidTeam(incoming()) && incoming().id == existing().id && isAdmin();
+      allow delete: if isValidId(teamId) && isAdmin();
+    }
+
+    match /matchEvents/{eventId} {
+      allow get: if isValidId(eventId);
+      allow list: if true;
+      allow create: if isValidId(eventId) && isValidMatchEvent(incoming()) && isAdmin();
+      allow update: if isValidId(eventId) && isValidMatchEvent(incoming()) && incoming().id == existing().id && isAdmin();
+      allow delete: if isValidId(eventId) && isAdmin();
+    }
+
+    match /chatMessages/{messageId} {
+      allow get: if isValidId(messageId);
+      allow list: if true;
+      allow create: if isValidId(messageId) && isValidChatMessage(incoming()) && (
+        isAdmin() ||
+        (
+          incoming().isAdmin == false &&
+          get(/databases/$(database)/documents/platform/site).data.chatEnabled == true
+        )
+      );
+      allow update: if false;
+      allow delete: if isValidId(messageId) && isAdmin();
+    }
+
+    match /managedUsers/{userId} {
+      allow get: if isValidId(userId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isValidManagedUser(incoming()) && isAdmin();
+      allow update: if isValidId(userId) && isValidManagedUser(incoming()) && incoming().id == existing().id && isAdmin();
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && ((isSignedIn() && request.auth.uid == adminUid) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(adminUid) && isValidAdminAccount(incoming()) && isAdmin();
+      allow update: if false;
+      allow delete: if isValidId(adminUid) && isAdmin() && adminUid != request.auth.uid;
+    }
+  }
+}

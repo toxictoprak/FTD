@@ -43,12 +43,34 @@ function readImageAsDataUrl(file: File): Promise<string> {
       reject(new Error('Please upload a PNG, JPG, or WebP image.'));
       return;
     }
-    if (file.size > 1_800_000) {
-      reject(new Error('Image file must be smaller than 1.8 MB.'));
+    if (file.size > 4_000_000) {
+      reject(new Error('Image file must be smaller than 4 MB.'));
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onload = () => {
+      const rawUrl = String(reader.result || '');
+      const img = new Image();
+      img.onload = () => {
+        const maxSide = 640;
+        const scale = Math.min(1, maxSide / Math.max(img.width || maxSide, img.height || maxSide));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(rawUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressed = canvas.toDataURL('image/webp', 0.82);
+        resolve(compressed.length <= 360_000 ? compressed : canvas.toDataURL('image/jpeg', 0.7));
+      };
+      img.onerror = () => resolve(rawUrl);
+      img.src = rawUrl;
+    };
     reader.onerror = () => reject(new Error('Failed to read image file.'));
     reader.readAsDataURL(file);
   });
@@ -58,6 +80,7 @@ export function AdminPage({ onOpenLogin }: AdminPageProps) {
   const {
     state,
     isAdmin,
+    adminEmail,
     setAdminToken,
     apiRequest,
     activeGoalAlert,
@@ -160,8 +183,6 @@ export function AdminPage({ onOpenLogin }: AdminPageProps) {
   const [newUserName, setNewUserName] = useState('');
   const [newUserClub, setNewUserClub] = useState('');
   const [newUserRole, setNewUserRole] = useState<'Player' | 'Captain' | 'Broadcaster' | 'Moderator'>('Player');
-  const [currentPin, setCurrentPin] = useState('');
-  const [newPin, setNewPin] = useState('');
 
   // Hydrate inputs when server state changes
   useEffect(() => {
@@ -224,7 +245,7 @@ export function AdminPage({ onOpenLogin }: AdminPageProps) {
               FTD Admin Command Center
             </h1>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              Protected by server-side 4-digit access verification. Normal visitors cannot execute broadcast, Ballon d&apos;Or, or website mutations.
+              Protected by verified Google Admin authentication. Normal visitors cannot execute broadcast, Ballon d&apos;Or, or website mutations.
             </p>
           </div>
           <button
@@ -507,20 +528,6 @@ export function AdminPage({ onOpenLogin }: AdminPageProps) {
       setEventAway('');
       setEventTime('');
       showNotice('ok', 'Upcoming fixture added.');
-    }
-  };
-
-  const changeAdminPin = async (e: FormEvent) => {
-    e.preventDefault();
-    const res = await apiRequest<{ message?: string }>('/api/admin/change-pin', {
-      method: 'POST',
-      body: JSON.stringify({ currentPin, newPin }),
-    });
-    if (!res.ok) showNotice('err', res.error || 'Could not change PIN.');
-    else {
-      setCurrentPin('');
-      setNewPin('');
-      showNotice('ok', res.data?.message || '4-digit access code updated.');
     }
   };
 
@@ -2210,50 +2217,35 @@ export function AdminPage({ onOpenLogin }: AdminPageProps) {
                 </label>
               </div>
 
-              <form onSubmit={changeAdminPin} className="rounded-xl bg-[#0D1017] border border-white/10 p-6 space-y-4">
+              <div className="rounded-xl bg-[#0D1017] border border-white/10 p-6 space-y-4">
                 <h2 className="font-display text-2xl font-bold uppercase text-white">
-                  Change 4-Digit Access Code
+                  Global Cloud Sync &amp; Admin Session
                 </h2>
-                {state.authMeta.envControlled ? (
-                  <p className="text-xs text-amber-300">
-                    Access code is managed via server environment secret ADMIN_ACCESS_CODE.
-                  </p>
-                ) : (
-                  <>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1">Current 4-Digit Code</label>
-                      <input
-                        type="password"
-                        inputMode="numeric"
-                        maxLength={4}
-                        value={currentPin}
-                        onChange={(e) => setCurrentPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                        placeholder="••••"
-                        className="w-full px-3 py-2 rounded-lg bg-[#06080C] border border-white/15 font-mono text-white tracking-widest"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1">New 4-Digit Code</label>
-                      <input
-                        type="password"
-                        inputMode="numeric"
-                        maxLength={4}
-                        value={newPin}
-                        onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                        placeholder="••••"
-                        className="w-full px-3 py-2 rounded-lg bg-[#06080C] border border-white/15 font-mono text-white tracking-widest"
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={newPin.length !== 4 || currentPin.length !== 4}
-                      className="w-full py-2.5 rounded-lg bg-white text-black text-xs font-bold uppercase disabled:opacity-40 cursor-pointer"
-                    >
-                      Update Access Code
-                    </button>
-                  </>
-                )}
-              </form>
+                <div className="rounded-lg bg-[#06080C] border border-white/10 p-4 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">Cloud Database</span>
+                    <span className="text-emerald-400 font-semibold">Firebase Firestore Live Sync</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">Visibility</span>
+                    <span className="text-white font-semibold">Worldwide Real-Time</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">Authenticated Admin</span>
+                    <span className="text-white font-mono">{adminEmail || 'Verified Admin'}</span>
+                  </div>
+                </div>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  All updates published in this dashboard are stored in Firestore and broadcast live to every visitor worldwide.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setAdminToken(null)}
+                  className="w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-white text-xs font-bold uppercase cursor-pointer"
+                >
+                  Sign Out Admin
+                </button>
+              </div>
             </div>
           </div>
         )}

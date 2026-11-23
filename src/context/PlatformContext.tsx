@@ -6,9 +6,19 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import { createDefaultPlatformState } from '../data/defaultState';
-import type { ChatMessage, PlatformState } from '../types/ftd';
-import { getApiUrl, getWebSocketUrl, isJsonResponse, safeReadJson } from '../utils/api';
+import { auth, db, googleProvider, PRIMARY_ADMIN_EMAIL } from '../firebase';
+import {
+  computeSyncedClock,
+  ensureFirestoreSeeded,
+  executeFirestoreApi,
+  subscribeAdminUsers,
+  subscribePublicFirestore,
+  type FirestoreLiveMatchDoc,
+} from '../services/ftdFirestore';
+import type { PlatformState } from '../types/ftd';
 import { playCeremonyFanfare, playGoalSound, primeBroadcastAudio } from '../utils/sound';
 
 export interface GoalAlertPayload {
@@ -28,11 +38,15 @@ interface PlatformContextValue {
   wsConnected: boolean;
   adminToken: string | null;
   isAdmin: boolean;
+  adminEmail: string | null;
+  authReady: boolean;
   soundEnabled: boolean;
   toggleSound: () => void;
   activeGoalAlert: GoalAlertPayload | null;
   dismissGoalAlert: () => void;
   setAdminToken: (token: string | null) => void;
+  signInWithGoogle: () => Promise<{ ok: boolean; error?: string }>;
+  signOutAdmin: () => Promise<void>;
   refreshState: () => Promise<void>;
   apiRequest: <T = unknown>(
     path: string,
@@ -42,25 +56,16 @@ interface PlatformContextValue {
 
 const PlatformContext = createContext<PlatformContextValue | null>(null);
 
-const ADMIN_TOKEN_STORAGE_KEY = 'ftd_admin_token';
-
-function readStoredAdminToken(): string | null {
-  try {
-    return window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
-  } catch {
-    return null;
+async function checkUserIsAdmin(user: User | null): Promise<boolean> {
+  if (!user || !user.emailVerified) return false;
+  if ((user.email || '').toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase()) {
+    return true;
   }
-}
-
-function writeStoredAdminToken(token: string | null): void {
   try {
-    if (token) {
-      window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-    } else {
-      window.sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-    }
+    const adminSnap = await getDoc(doc(db, 'admins', user.uid));
+    return adminSnap.exists();
   } catch {
-    // Ignore storage restriction errors in sandboxed iframes or private mode
+    return false;
   }
 }
 
@@ -69,26 +74,23 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
-  const [pollingEnabled, setPollingEnabled] = useState(false);
-  const [adminToken, setAdminTokenState] = useState<string | null>(() => readStoredAdminToken());
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminEmail, setAdminEmail] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [activeGoalAlert, setActiveGoalAlert] = useState<GoalAlertPayload | null>(null);
 
   const soundRef = useRef(soundEnabled);
   soundRef.current = soundEnabled;
 
+  const stateRef = useRef<PlatformState | null>(null);
+  stateRef.current = state;
+
+  const liveMatchDocRef = useRef<FirestoreLiveMatchDoc | null>(null);
   const goalTimerRef = useRef<number | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimerRef = useRef<number | null>(null);
-  const apiAvailableRef = useRef<boolean>(false);
-  const hasLoadedOnceRef = useRef<boolean>(false);
+  const hasLoadedOnceRef = useRef(false);
   const prevGoalIdRef = useRef<number | null>(null);
   const prevCeremonyPhaseRef = useRef<string | null>(null);
-
-  const setAdminToken = useCallback((token: string | null) => {
-    setAdminTokenState(token);
-    writeStoredAdminToken(token);
-  }, []);
 
   const toggleSound = useCallback(() => {
     setSoundEnabled((prev) => {
@@ -117,279 +119,223 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     }, 5500);
   }, []);
 
-  const applySyncedState = useCallback(
-    (nextState: PlatformState) => {
-      if (hasLoadedOnceRef.current) {
+  const signOutAdmin = useCallback(async () => {
+    try {
+      await signOut(auth);
+    } catch {
+      // Ignore sign out error
+    }
+    setIsAdmin(false);
+    setAdminEmail(null);
+  }, []);
+
+  const setAdminToken = useCallback(
+    (token: string | null) => {
+      if (token === null) {
+        void signOutAdmin();
+      }
+    },
+    [signOutAdmin]
+  );
+
+  const signInWithGoogle = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      const allowed = await checkUserIsAdmin(user);
+      if (!allowed) {
+        await signOut(auth);
+        setIsAdmin(false);
+        setAdminEmail(null);
+        return {
+          ok: false,
+          error: `Account "${user.email || 'unknown'}" is not authorized as an FTD Admin.`,
+        };
+      }
+      setIsAdmin(true);
+      setAdminEmail(user.email);
+      await ensureFirestoreSeeded(user.uid, user.email || PRIMARY_ADMIN_EMAIL);
+      return { ok: true };
+    } catch (err) {
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/unauthorized-domain') {
+        const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+        return {
+          ok: false,
+          error: `Domain "${host}" must be added to Firebase Console → Authentication → Settings → Authorized domains before signing in here.`,
+        };
+      }
+      if (code === 'auth/popup-closed-by-user') {
+        return { ok: false, error: 'Google sign-in popup was closed.' };
+      }
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Google authentication failed.',
+      };
+    }
+  }, []);
+
+  // Firebase Auth listener
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      const allowed = await checkUserIsAdmin(user);
+      setIsAdmin(allowed);
+      setAdminEmail(allowed ? user?.email || PRIMARY_ADMIN_EMAIL : null);
+      setAuthReady(true);
+      if (allowed && user) {
+        try {
+          await ensureFirestoreSeeded(user.uid, user.email || PRIMARY_ADMIN_EMAIL);
+        } catch {
+          // Handled cleanly in ErrorBoundary / notice if rules reject
+        }
+      }
+    });
+    return () => unsubAuth();
+  }, []);
+
+  // Global real-time Firestore subscriptions (worldwide live updates)
+  useEffect(() => {
+    const baseState = createDefaultPlatformState();
+    baseState.authMeta = { adminConfigured: true, envControlled: false };
+    setState(baseState);
+    prevGoalIdRef.current = baseState.liveMatch.lastGoalId;
+    prevCeremonyPhaseRef.current = baseState.ballonDorState.ceremonyPhase;
+    setLoading(false);
+
+    const unsubPublic = subscribePublicFirestore({
+      onSite: (site) => {
+        setWsConnected(true);
+        setError(null);
+        setState((prev) => (prev ? { ...prev, site } : prev));
+      },
+      onLiveMatch: (lmDoc) => {
+        liveMatchDocRef.current = lmDoc;
+        setWsConnected(true);
+        const synced = computeSyncedClock(lmDoc);
+        const nextLiveMatch = {
+          ...lmDoc,
+          matchMinute: synced.matchMinute,
+          matchSecond: synced.matchSecond,
+        };
+
         if (
+          hasLoadedOnceRef.current &&
           prevGoalIdRef.current !== null &&
-          nextState.liveMatch.lastGoalId > prevGoalIdRef.current &&
-          nextState.liveMatch.lastGoalTeam
+          nextLiveMatch.lastGoalId > prevGoalIdRef.current &&
+          nextLiveMatch.lastGoalTeam
         ) {
-          const side = nextState.liveMatch.lastGoalTeam;
+          const side = nextLiveMatch.lastGoalTeam;
           triggerGoalAlert({
-            goalId: nextState.liveMatch.lastGoalId,
+            goalId: nextLiveMatch.lastGoalId,
             side,
             teamName:
-              side === 'home' ? nextState.liveMatch.homeTeamName : nextState.liveMatch.awayTeamName,
-            scorer: nextState.liveMatch.lastGoalScorer,
-            minute: nextState.liveMatch.lastGoalMinute,
-            homeScore: nextState.liveMatch.homeScore,
-            awayScore: nextState.liveMatch.awayScore,
+              side === 'home' ? nextLiveMatch.homeTeamName : nextLiveMatch.awayTeamName,
+            scorer: nextLiveMatch.lastGoalScorer,
+            minute: nextLiveMatch.lastGoalMinute,
+            homeScore: nextLiveMatch.homeScore,
+            awayScore: nextLiveMatch.awayScore,
           });
         }
 
+        prevGoalIdRef.current = nextLiveMatch.lastGoalId;
+        hasLoadedOnceRef.current = true;
+        setState((prev) => (prev ? { ...prev, liveMatch: nextLiveMatch } : prev));
+      },
+      onBallonDor: (ballonDorState) => {
+        setWsConnected(true);
         if (
+          hasLoadedOnceRef.current &&
           prevCeremonyPhaseRef.current !== 'revealed' &&
-          nextState.ballonDorState.ceremonyPhase === 'revealed' &&
-          nextState.ballonDorState.winnerId !== null &&
+          ballonDorState.ceremonyPhase === 'revealed' &&
+          ballonDorState.winnerId !== null &&
           soundRef.current
         ) {
           playCeremonyFanfare();
         }
-      }
-
-      prevGoalIdRef.current = nextState.liveMatch.lastGoalId;
-      prevCeremonyPhaseRef.current = nextState.ballonDorState.ceremonyPhase;
-      hasLoadedOnceRef.current = true;
-      setState(nextState);
-      setError(null);
-    },
-    [triggerGoalAlert]
-  );
-
-  const refreshState = useCallback(async () => {
-    try {
-      const res = await fetch(getApiUrl('/api/state'), {
-        headers: { Accept: 'application/json' },
-      });
-
-      if (!res.ok || !isJsonResponse(res)) {
-        // If static hosting returned index.html (SPA fallback) or an unreachable API route,
-        // keep the platform operational with default seeded state rather than crashing with a JSON SyntaxError.
-        apiAvailableRef.current = false;
-        setState((prev) => {
-          if (prev) return prev;
-          const fallback = createDefaultPlatformState();
-          prevGoalIdRef.current = fallback.liveMatch.lastGoalId;
-          prevCeremonyPhaseRef.current = fallback.ballonDorState.ceremonyPhase;
-          hasLoadedOnceRef.current = true;
-          return fallback;
-        });
-        setError(null);
-        return;
-      }
-
-      const data = await safeReadJson<PlatformState>(res);
-      if (!data || !data.site || !data.liveMatch) {
-        apiAvailableRef.current = false;
-        setState((prev) => prev ?? createDefaultPlatformState());
-        setError(null);
-        return;
-      }
-
-      apiAvailableRef.current = true;
-      applySyncedState(data);
-    } catch {
-      apiAvailableRef.current = false;
-      setState((prev) => {
-        if (prev) return prev;
-        const fallback = createDefaultPlatformState();
-        prevGoalIdRef.current = fallback.liveMatch.lastGoalId;
-        prevCeremonyPhaseRef.current = fallback.ballonDorState.ceremonyPhase;
+        prevCeremonyPhaseRef.current = ballonDorState.ceremonyPhase;
         hasLoadedOnceRef.current = true;
-        return fallback;
-      });
-      setError(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [applySyncedState]);
-
-  useEffect(() => {
-    void refreshState();
-  }, [refreshState]);
-
-  useEffect(() => {
-    let unmounted = false;
-    let attempt = 0;
-    let openedOnce = false;
-
-    const connect = () => {
-      if (unmounted) return;
-      const wsUrl = getWebSocketUrl();
-      if (!wsUrl) {
-        setPollingEnabled(true);
-        return;
-      }
-
-      let ws: WebSocket;
-      try {
-        ws = new WebSocket(wsUrl);
-      } catch {
+        setState((prev) => (prev ? { ...prev, ballonDorState } : prev));
+      },
+      onNews: (news) => setState((prev) => (prev ? { ...prev, news } : prev)),
+      onCompetitions: (competitions) =>
+        setState((prev) => (prev ? { ...prev, competitions } : prev)),
+      onUpcomingEvents: (upcomingEvents) =>
+        setState((prev) => (prev ? { ...prev, upcomingEvents } : prev)),
+      onNominees: (nominees) => setState((prev) => (prev ? { ...prev, nominees } : prev)),
+      onHistory: (ballonDorHistory) =>
+        setState((prev) => (prev ? { ...prev, ballonDorHistory } : prev)),
+      onTeams: (teams) => setState((prev) => (prev ? { ...prev, teams } : prev)),
+      onMatchEvents: (matchEvents) => setState((prev) => (prev ? { ...prev, matchEvents } : prev)),
+      onChatMessages: (chatMessages) =>
+        setState((prev) => (prev ? { ...prev, chatMessages } : prev)),
+      onError: (err) => {
         setWsConnected(false);
-        setPollingEnabled(true);
-        return;
-      }
-
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        attempt = 0;
-        openedOnce = true;
-        apiAvailableRef.current = true;
-        setWsConnected(true);
-        setPollingEnabled(false);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data) as { type: string; payload: unknown };
-          if (msg.type === 'state:sync') {
-            applySyncedState(msg.payload as PlatformState);
-            setLoading(false);
-          } else if (msg.type === 'match:clock') {
-            const clock = msg.payload as { matchMinute: number; matchSecond: number };
-            setState((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    liveMatch: {
-                      ...prev.liveMatch,
-                      matchMinute: clock.matchMinute,
-                      matchSecond: clock.matchSecond,
-                    },
-                  }
-                : prev
-            );
-          } else if (msg.type === 'viewer:count') {
-            const v = msg.payload as { viewerCount: number };
-            setState((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    liveMatch: { ...prev.liveMatch, viewerCount: v.viewerCount },
-                  }
-                : prev
-            );
-          } else if (msg.type === 'chat:message') {
-            const chatMsg = msg.payload as ChatMessage;
-            setState((prev) => {
-              if (!prev) return prev;
-              if (prev.chatMessages.some((m) => m.id === chatMsg.id)) return prev;
-              return {
-                ...prev,
-                chatMessages: [...prev.chatMessages.slice(-59), chatMsg],
-              };
-            });
-          } else if (msg.type === 'match:goal') {
-            triggerGoalAlert(msg.payload as GoalAlertPayload);
-          } else if (msg.type === 'ceremony:reveal') {
-            if (soundRef.current) {
-              playCeremonyFanfare();
-            }
-          }
-        } catch {
-          // Ignore malformed WebSocket frames
-        }
-      };
-
-      ws.onclose = () => {
-        setWsConnected(false);
-        if (unmounted) return;
-
-        // If running on serverless/edge hosting (like Cloudflare Pages Functions) where /ws does not accept WebSockets,
-        // stop reconnecting after 2 quick failed attempts and switch to HTTP state polling instead.
-        if (!openedOnce && attempt >= 1) {
-          setPollingEnabled(true);
-          return;
-        }
-
-        const delay = Math.min(8000, 1000 * Math.pow(1.5, attempt));
-        attempt += 1;
-        reconnectTimerRef.current = window.setTimeout(connect, delay);
-      };
-
-      ws.onerror = () => {
-        try {
-          ws.close();
-        } catch {
-          // Ignore close error
-        }
-      };
-    };
-
-    connect();
+        setError(err.message);
+      },
+    });
 
     return () => {
-      unmounted = true;
-      if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
+      unsubPublic();
       if (goalTimerRef.current) window.clearTimeout(goalTimerRef.current);
-      try {
-        wsRef.current?.close();
-      } catch {
-        // Ignore close error
-      }
     };
-  }, [applySyncedState, triggerGoalAlert]);
+  }, [triggerGoalAlert]);
 
+  // Admin-only roster subscription
   useEffect(() => {
-    if (!pollingEnabled || wsConnected) return;
+    if (!isAdmin) return;
+    const unsubUsers = subscribeAdminUsers(
+      (users) => setState((prev) => (prev ? { ...prev, users } : prev)),
+      (err) => setError(err.message)
+    );
+    return () => unsubUsers();
+  }, [isAdmin]);
+
+  // Synchronized client-side match clock ticker driven by Firestore clockAnchorMs
+  useEffect(() => {
     const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && apiAvailableRef.current) {
-        void refreshState();
+      const lmDoc = liveMatchDocRef.current;
+      if (!lmDoc || !lmDoc.clockRunning || lmDoc.status !== 'LIVE' || !lmDoc.clockAnchorMs) {
+        return;
       }
-    }, 3000);
+      const synced = computeSyncedClock(lmDoc);
+      setState((prev) =>
+        prev
+          ? {
+              ...prev,
+              liveMatch: {
+                ...prev.liveMatch,
+                matchMinute: synced.matchMinute,
+                matchSecond: synced.matchSecond,
+              },
+            }
+          : prev
+      );
+    }, 1000);
     return () => window.clearInterval(timer);
-  }, [pollingEnabled, wsConnected, refreshState]);
+  }, []);
+
+  const refreshState = useCallback(async () => {
+    setError(null);
+  }, []);
 
   const apiRequest = useCallback(
     async <T = unknown,>(
       path: string,
       options: RequestInit = {}
     ): Promise<{ ok: boolean; data?: T; error?: string; status: number }> => {
-      try {
-        const headers = new Headers(options.headers || {});
-        if (!headers.has('Accept')) {
-          headers.set('Accept', 'application/json');
-        }
-        if (!headers.has('Content-Type') && options.body) {
-          headers.set('Content-Type', 'application/json');
-        }
-        if (adminToken) {
-          headers.set('Authorization', `Bearer ${adminToken}`);
-        }
-        const res = await fetch(getApiUrl(path), { ...options, headers });
-
-        if (!isJsonResponse(res)) {
-          return {
-            ok: false,
-            error:
-              'FTD API endpoint returned an unexpected non-JSON response. Make sure Cloudflare Pages Functions (/functions) or VITE_API_BASE_URL is deployed.',
-            status: res.status || 503,
-          };
-        }
-
-        const json = await safeReadJson<T & { error?: string }>(res);
-        if (!res.ok) {
-          if (res.status === 401 && path.startsWith('/api/admin/') && path !== '/api/admin/login') {
-            setAdminToken(null);
-          }
-          return {
-            ok: false,
-            error: json?.error || `Request failed (${res.status})`,
-            status: res.status,
-          };
-        }
-        return { ok: true, data: (json ?? undefined) as T | undefined, status: res.status };
-      } catch (err) {
-        return {
-          ok: false,
-          error: err instanceof Error ? err.message : 'Network error',
-          status: 0,
-        };
+      const current = stateRef.current;
+      if (!current) {
+        return { ok: false, error: 'Platform state is still initializing.', status: 503 };
       }
+      return executeFirestoreApi<T>(
+        path,
+        options,
+        current,
+        liveMatchDocRef.current?.clockAnchorMs ?? null,
+        isAdmin
+      );
     },
-    [adminToken, setAdminToken]
+    [isAdmin]
   );
 
   return (
@@ -399,13 +345,17 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         loading,
         error,
         wsConnected,
-        adminToken,
-        isAdmin: Boolean(adminToken),
+        adminToken: isAdmin ? 'firebase-admin' : null,
+        isAdmin,
+        adminEmail,
+        authReady,
         soundEnabled,
         toggleSound,
         activeGoalAlert,
         dismissGoalAlert,
         setAdminToken,
+        signInWithGoogle,
+        signOutAdmin,
         refreshState,
         apiRequest,
       }}
