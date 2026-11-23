@@ -6,7 +6,9 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { createDefaultPlatformState } from '../data/defaultState';
 import type { ChatMessage, PlatformState } from '../types/ftd';
+import { getApiUrl, getWebSocketUrl, isJsonResponse, safeReadJson } from '../utils/api';
 import { playCeremonyFanfare, playGoalSound, primeBroadcastAudio } from '../utils/sound';
 
 export interface GoalAlertPayload {
@@ -40,12 +42,35 @@ interface PlatformContextValue {
 
 const PlatformContext = createContext<PlatformContextValue | null>(null);
 
+const ADMIN_TOKEN_STORAGE_KEY = 'ftd_admin_token';
+
+function readStoredAdminToken(): string | null {
+  try {
+    return window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAdminToken(token: string | null): void {
+  try {
+    if (token) {
+      window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+    } else {
+      window.sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage restriction errors in sandboxed iframes or private mode
+  }
+}
+
 export function PlatformProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<PlatformState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
-  const [adminToken, setAdminToken] = useState<string | null>(null);
+  const [pollingEnabled, setPollingEnabled] = useState(false);
+  const [adminToken, setAdminTokenState] = useState<string | null>(() => readStoredAdminToken());
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [activeGoalAlert, setActiveGoalAlert] = useState<GoalAlertPayload | null>(null);
 
@@ -55,6 +80,15 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
   const goalTimerRef = useRef<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const apiAvailableRef = useRef<boolean>(false);
+  const hasLoadedOnceRef = useRef<boolean>(false);
+  const prevGoalIdRef = useRef<number | null>(null);
+  const prevCeremonyPhaseRef = useRef<string | null>(null);
+
+  const setAdminToken = useCallback((token: string | null) => {
+    setAdminTokenState(token);
+    writeStoredAdminToken(token);
+  }, []);
 
   const toggleSound = useCallback(() => {
     setSoundEnabled((prev) => {
@@ -83,45 +117,135 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     }, 5500);
   }, []);
 
+  const applySyncedState = useCallback(
+    (nextState: PlatformState) => {
+      if (hasLoadedOnceRef.current) {
+        if (
+          prevGoalIdRef.current !== null &&
+          nextState.liveMatch.lastGoalId > prevGoalIdRef.current &&
+          nextState.liveMatch.lastGoalTeam
+        ) {
+          const side = nextState.liveMatch.lastGoalTeam;
+          triggerGoalAlert({
+            goalId: nextState.liveMatch.lastGoalId,
+            side,
+            teamName:
+              side === 'home' ? nextState.liveMatch.homeTeamName : nextState.liveMatch.awayTeamName,
+            scorer: nextState.liveMatch.lastGoalScorer,
+            minute: nextState.liveMatch.lastGoalMinute,
+            homeScore: nextState.liveMatch.homeScore,
+            awayScore: nextState.liveMatch.awayScore,
+          });
+        }
+
+        if (
+          prevCeremonyPhaseRef.current !== 'revealed' &&
+          nextState.ballonDorState.ceremonyPhase === 'revealed' &&
+          nextState.ballonDorState.winnerId !== null &&
+          soundRef.current
+        ) {
+          playCeremonyFanfare();
+        }
+      }
+
+      prevGoalIdRef.current = nextState.liveMatch.lastGoalId;
+      prevCeremonyPhaseRef.current = nextState.ballonDorState.ceremonyPhase;
+      hasLoadedOnceRef.current = true;
+      setState(nextState);
+      setError(null);
+    },
+    [triggerGoalAlert]
+  );
+
   const refreshState = useCallback(async () => {
     try {
-      const res = await fetch('/api/state');
-      if (!res.ok) throw new Error('Failed to load FTD platform state');
-      const data = (await res.json()) as PlatformState;
-      setState(data);
+      const res = await fetch(getApiUrl('/api/state'), {
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!res.ok || !isJsonResponse(res)) {
+        // If static hosting returned index.html (SPA fallback) or an unreachable API route,
+        // keep the platform operational with default seeded state rather than crashing with a JSON SyntaxError.
+        apiAvailableRef.current = false;
+        setState((prev) => {
+          if (prev) return prev;
+          const fallback = createDefaultPlatformState();
+          prevGoalIdRef.current = fallback.liveMatch.lastGoalId;
+          prevCeremonyPhaseRef.current = fallback.ballonDorState.ceremonyPhase;
+          hasLoadedOnceRef.current = true;
+          return fallback;
+        });
+        setError(null);
+        return;
+      }
+
+      const data = await safeReadJson<PlatformState>(res);
+      if (!data || !data.site || !data.liveMatch) {
+        apiAvailableRef.current = false;
+        setState((prev) => prev ?? createDefaultPlatformState());
+        setError(null);
+        return;
+      }
+
+      apiAvailableRef.current = true;
+      applySyncedState(data);
+    } catch {
+      apiAvailableRef.current = false;
+      setState((prev) => {
+        if (prev) return prev;
+        const fallback = createDefaultPlatformState();
+        prevGoalIdRef.current = fallback.liveMatch.lastGoalId;
+        prevCeremonyPhaseRef.current = fallback.ballonDorState.ceremonyPhase;
+        hasLoadedOnceRef.current = true;
+        return fallback;
+      });
       setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to connect to FTD server');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applySyncedState]);
 
   useEffect(() => {
-    refreshState();
+    void refreshState();
   }, [refreshState]);
 
   useEffect(() => {
     let unmounted = false;
     let attempt = 0;
+    let openedOnce = false;
 
     const connect = () => {
       if (unmounted) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
-      const ws = new WebSocket(wsUrl);
+      const wsUrl = getWebSocketUrl();
+      if (!wsUrl) {
+        setPollingEnabled(true);
+        return;
+      }
+
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch {
+        setWsConnected(false);
+        setPollingEnabled(true);
+        return;
+      }
+
       wsRef.current = ws;
 
       ws.onopen = () => {
         attempt = 0;
+        openedOnce = true;
+        apiAvailableRef.current = true;
         setWsConnected(true);
+        setPollingEnabled(false);
       };
 
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data) as { type: string; payload: unknown };
           if (msg.type === 'state:sync') {
-            setState(msg.payload as PlatformState);
+            applySyncedState(msg.payload as PlatformState);
             setLoading(false);
           } else if (msg.type === 'match:clock') {
             const clock = msg.payload as { matchMinute: number; matchSecond: number };
@@ -165,21 +289,32 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
             }
           }
         } catch {
-          // Ignore malformed frame
+          // Ignore malformed WebSocket frames
         }
       };
 
       ws.onclose = () => {
         setWsConnected(false);
-        if (!unmounted) {
-          const delay = Math.min(8000, 1000 * Math.pow(1.5, attempt));
-          attempt += 1;
-          reconnectTimerRef.current = window.setTimeout(connect, delay);
+        if (unmounted) return;
+
+        // If running on serverless/edge hosting (like Cloudflare Pages Functions) where /ws does not accept WebSockets,
+        // stop reconnecting after 2 quick failed attempts and switch to HTTP state polling instead.
+        if (!openedOnce && attempt >= 1) {
+          setPollingEnabled(true);
+          return;
         }
+
+        const delay = Math.min(8000, 1000 * Math.pow(1.5, attempt));
+        attempt += 1;
+        reconnectTimerRef.current = window.setTimeout(connect, delay);
       };
 
       ws.onerror = () => {
-        ws.close();
+        try {
+          ws.close();
+        } catch {
+          // Ignore close error
+        }
       };
     };
 
@@ -189,9 +324,23 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       unmounted = true;
       if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
       if (goalTimerRef.current) window.clearTimeout(goalTimerRef.current);
-      wsRef.current?.close();
+      try {
+        wsRef.current?.close();
+      } catch {
+        // Ignore close error
+      }
     };
-  }, [triggerGoalAlert]);
+  }, [applySyncedState, triggerGoalAlert]);
+
+  useEffect(() => {
+    if (!pollingEnabled || wsConnected) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && apiAvailableRef.current) {
+        void refreshState();
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [pollingEnabled, wsConnected, refreshState]);
 
   const apiRequest = useCallback(
     async <T = unknown,>(
@@ -200,25 +349,38 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     ): Promise<{ ok: boolean; data?: T; error?: string; status: number }> => {
       try {
         const headers = new Headers(options.headers || {});
+        if (!headers.has('Accept')) {
+          headers.set('Accept', 'application/json');
+        }
         if (!headers.has('Content-Type') && options.body) {
           headers.set('Content-Type', 'application/json');
         }
         if (adminToken) {
           headers.set('Authorization', `Bearer ${adminToken}`);
         }
-        const res = await fetch(path, { ...options, headers });
-        const json = await res.json().catch(() => ({}));
+        const res = await fetch(getApiUrl(path), { ...options, headers });
+
+        if (!isJsonResponse(res)) {
+          return {
+            ok: false,
+            error:
+              'FTD API endpoint returned an unexpected non-JSON response. Make sure Cloudflare Pages Functions (/functions) or VITE_API_BASE_URL is deployed.',
+            status: res.status || 503,
+          };
+        }
+
+        const json = await safeReadJson<T & { error?: string }>(res);
         if (!res.ok) {
           if (res.status === 401 && path.startsWith('/api/admin/') && path !== '/api/admin/login') {
             setAdminToken(null);
           }
           return {
             ok: false,
-            error: (json as { error?: string }).error || 'Request failed',
+            error: json?.error || `Request failed (${res.status})`,
             status: res.status,
           };
         }
-        return { ok: true, data: json as T, status: res.status };
+        return { ok: true, data: (json ?? undefined) as T | undefined, status: res.status };
       } catch (err) {
         return {
           ok: false,
@@ -227,7 +389,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
         };
       }
     },
-    [adminToken]
+    [adminToken, setAdminToken]
   );
 
   return (
