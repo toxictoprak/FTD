@@ -1,0 +1,6 @@
+{
+  "name": "FTD — Football Competition & Live Broadcast Platform",
+  "description": "Official platform for FTD football — live match broadcasts, dynamic Champions League and league scoreboards, Ballon d'Or awards ceremony, and real-time administration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
